@@ -139,6 +139,8 @@ class Soundd:
 
     sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
 
+    """
+    ##### ORIGINAL SOUNDD_THREAD LOOP #####
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)
 
@@ -155,6 +157,40 @@ class Soundd:
         rk.keep_time()
 
         assert stream.active
+    ##### ORIGINAL SOUNDD_THREAD LOOP #####
+    """
+
+    ##### SIMULATION PATCH TO PREVENT CRASHES DUE TO SOUNDD FAIL #####
+    ##################################################################
+    # In the case of soundd going down, we will sleep for 3 seconds
+    # then try turning it back on again. This way we still preserve
+    # the possibility of soundd getting back on line (don't just
+    # ignore it going down), but also ensure that the
+    # `assert stream.active` doesn't cause our metadrive openpilot sim
+    # to disconnect.
+    ##################################################################
+    while True:
+      try:
+        with self.get_stream(sd) as stream:
+          rk = Ratekeeper(20)
+
+          cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
+          while stream.active:
+            sm.update(0)
+
+            if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
+              self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
+              self.current_volume = self.calculate_volume(float(self.spl_filter_weighted.x))
+
+            self.get_audible_alert(sm)
+            rk.keep_time()
+
+          cloudlog.warning(f"soundd stream became inactive, attempting to repopen...")
+
+      except Exception:
+        cloudlog.exception("soundd stream error")
+        time.sleep(3)
+    ##### SIMULATION PATCH TO PREVENT CRASHES DUE TO SOUNDD FAIL #####
 
 
 def main():
